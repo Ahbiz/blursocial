@@ -106,6 +106,25 @@ export default function Home() {
           <p>© 2024 Blur. Anonymous chat made simple.</p>
         </div>
       </footer>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "WebApplication",
+            "name": "Blur",
+            "url": "https://blursocial.codiac.online",
+            "description": "Create secure, password-protected chat rooms and share them instantly. Blur offers a private, anonymous, and real-time messaging experience.",
+            "applicationCategory": "CommunicationApplication",
+            "operatingSystem": "All",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          }),
+        }}
+      />
     </div>
   );
 }
