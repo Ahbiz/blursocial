@@ -38,6 +38,7 @@ export async function GET(
         timestamp: msg.timestamp,
         tempId: msg.tempId,
         reactions: summarizeReactions(msg.reactions ?? {}, clientHash),
+        replyTo: msg.replyTo,
       })),
     });
   } catch (error) {
@@ -55,7 +56,7 @@ export async function POST(
 ) {
   try {
     const { slug } = await params;
-    const { content, tempId } = await request.json();
+    const { content, tempId, replyTo } = await request.json();
 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return NextResponse.json(
@@ -80,6 +81,12 @@ export async function POST(
       timestamp: new Date(),
       tempId,
       reactions: {},
+      ...(replyTo && {
+        replyTo: {
+          messageId: replyTo.messageId,
+          preview: replyTo.preview.substring(0, 100),
+        },
+      }),
     };
 
     const result = await db.collection<Message>('messages').insertOne(message);
@@ -92,6 +99,7 @@ export async function POST(
           timestamp: message.timestamp,
           tempId,
           reactions: [],
+          replyTo: message.replyTo,
         },
       },
       { status: 201 }

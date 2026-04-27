@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
         console.log(`Socket ${socket.id} left room ${roomSlug}`);
       });
 
-      socket.on('send-message', async (data: { roomSlug: string; content: string; tempId: string }) => {
+      socket.on('send-message', async (data: { roomSlug: string; content: string; tempId: string; replyTo?: { messageId: string; preview: string } }) => {
         try {
           const db = await getDb();
           const room = await db.collection('rooms').findOne({ slug: data.roomSlug });
@@ -62,6 +62,12 @@ export async function GET(req: NextRequest) {
             timestamp: new Date(),
             tempId: data.tempId,
             reactions: {},
+            ...(data.replyTo && {
+              replyTo: {
+                messageId: data.replyTo.messageId,
+                preview: data.replyTo.preview.substring(0, 100),
+              },
+            }),
           };
 
           const result = await db.collection<Message>('messages').insertOne(message);
@@ -72,6 +78,7 @@ export async function GET(req: NextRequest) {
             timestamp: message.timestamp,
             tempId: data.tempId,
             reactions: [],
+            replyTo: message.replyTo,
           };
 
           io!.to(data.roomSlug).emit('new-message', savedMessage);

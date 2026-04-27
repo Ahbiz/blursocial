@@ -76,6 +76,12 @@ app.prepare().then(() => {
           timestamp: new Date(),
           tempId: data.tempId,
           reactions: {},
+          ...(data.replyTo && {
+            replyTo: {
+              messageId: data.replyTo.messageId,
+              preview: data.replyTo.preview.substring(0, 100),
+            },
+          }),
         };
 
         const result = await database.collection('messages').insertOne(message);
@@ -86,6 +92,7 @@ app.prepare().then(() => {
           timestamp: message.timestamp,
           tempId: data.tempId,
           reactions: [],
+          replyTo: message.replyTo,
         };
 
         io.to(data.roomSlug).emit('new-message', savedMessage);

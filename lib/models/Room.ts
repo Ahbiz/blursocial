@@ -16,4 +16,8 @@ export interface Message {
   timestamp: Date;
   tempId?: string;
   reactions?: Record<string, string[]>;
+  replyTo?: {
+    messageId: string;
+    preview: string;
+  };
 }

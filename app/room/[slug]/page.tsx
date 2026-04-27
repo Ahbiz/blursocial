@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, use, FormEvent, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
-import { FiSend, FiMessageCircle, FiSmile, FiPlus } from 'react-icons/fi';
+import { FiSend, FiMessageCircle, FiSmile, FiPlus, FiCornerUpLeft, FiX } from 'react-icons/fi';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import { nanoid } from 'nanoid';
@@ -35,6 +35,10 @@ interface Message {
   tempId?: string;
   isOptimistic?: boolean;
   reactions: ReactionSummary[];
+  replyTo?: {
+    messageId: string;
+    preview: string;
+  };
 }
 
 type SetMap = Record<string, Set<string>>;
@@ -117,6 +121,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   const [clientHash, setClientHash] = useState<string | null>(null);
   const [localReactions, setLocalReactions] = useState<SetMap>({});
   const [activeReactionPicker, setActiveReactionPicker] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -246,6 +251,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
           hashes: reaction.hashes,
         }))
       : [],
+    replyTo: msg.replyTo,
   }), []);
 
   const applyServerReactionSnapshot = useCallback(
@@ -478,21 +484,36 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
       tempId,
       isOptimistic: true,
       reactions: [],
+      replyTo: replyingTo
+        ? {
+            messageId: replyingTo.id,
+            preview: replyingTo.content.substring(0, 100),
+          }
+        : undefined,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
 
+    const payload = {
+      roomSlug: resolvedParams.slug,
+      content: newMessage,
+      tempId,
+      ...(replyingTo && {
+        replyTo: {
+          messageId: replyingTo.id,
+          preview: replyingTo.content.substring(0, 100),
+        },
+      }),
+    };
+
     if (socket && socket.connected) {
-      socket.emit('send-message', {
-        roomSlug: resolvedParams.slug,
-        content: newMessage,
-        tempId,
-      });
+      socket.emit('send-message', payload);
     } else {
-      await sendMessageViaHttp(newMessage, tempId);
+      await sendMessageViaHttp(newMessage, tempId, replyingTo);
     }
 
     setNewMessage('');
+    setReplyingTo(null);
     inputRef.current?.focus();
   };
 
@@ -534,12 +555,21 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     }
   };
 
-  const sendMessageViaHttp = async (content: string, tempId: string) => {
+  const sendMessageViaHttp = async (content: string, tempId: string, replyTo: Message | null = null) => {
     try {
       const response = await fetch(`/api/rooms/${resolvedParams.slug}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, tempId }),
+        body: JSON.stringify({
+          content,
+          tempId,
+          ...(replyTo && {
+            replyTo: {
+              messageId: replyTo.id,
+              preview: replyTo.content.substring(0, 100),
+            },
+          }),
+        }),
       });
 
       if (!response.ok) {
@@ -755,6 +785,18 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
                 className={`animate-fade-in ${message.isOptimistic ? 'opacity-60' : ''}`}
               >
                 <div className="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-primary)] p-4 max-w-2xl shadow-sm hover:shadow-[var(--shadow-md)] transition-shadow">
+                  {message.replyTo && (
+                    <div className="mb-3 pl-3 border-l-2 border-[var(--accent-primary)] bg-[var(--accent-primary)]/5 rounded-r-lg p-2">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <FiCornerUpLeft className="w-3 h-3 text-[var(--accent-primary)]" />
+                        <span className="text-xs font-medium text-[var(--accent-primary)]">Replying to</span>
+                      </div>
+                      <p className="text-sm text-[var(--text-secondary)] line-clamp-2">
+                        {message.replyTo.preview}
+                      </p>
+                    </div>
+                  )}
+
                   <div className="flex items-start justify-between gap-4">
                     <p className="text-[var(--text-primary)] break-words whitespace-pre-wrap flex-1">
                       {message.content}
@@ -830,6 +872,15 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
                         </div>
                       )}
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setReplyingTo(message)}
+                      className="flex items-center justify-center w-8 h-8 rounded-full border border-[var(--border-primary)] text-[var(--text-secondary)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-secondary)]"
+                      aria-label="Reply to message"
+                    >
+                      <FiCornerUpLeft className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -841,6 +892,27 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
       <div className="bg-[var(--bg-secondary)] border-t border-[var(--border-primary)] px-4 sm:px-6 py-4">
         <form onSubmit={handleSendMessage} className="max-w-5xl mx-auto">
+          {replyingTo && (
+            <div className="mb-3 flex items-start gap-3 bg-[var(--accent-primary)]/5 border border-[var(--accent-primary)]/20 rounded-xl p-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <FiCornerUpLeft className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                  <span className="text-xs font-semibold text-[var(--accent-primary)]">Replying to message</span>
+                </div>
+                <p className="text-sm text-[var(--text-secondary)] line-clamp-2">
+                  {replyingTo.content}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReplyingTo(null)}
+                className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"
+                aria-label="Cancel reply"
+              >
+                <FiX className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <div className="flex gap-3">
             <input
               ref={inputRef}
