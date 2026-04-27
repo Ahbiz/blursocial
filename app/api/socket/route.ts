@@ -4,10 +4,11 @@ import { Server as HTTPServer } from 'http';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 import { Message } from '@/lib/models/Room';
+import { getSocketServer, setSocketServer } from '@/lib/socketServer';
 
 export const dynamic = 'force-dynamic';
 
-let io: SocketIOServer | null = null;
+let io: SocketIOServer | null = getSocketServer();
 
 export async function GET(req: NextRequest) {
   if (!io) {
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
     }
 
     io = new SocketIOServer(httpServer, {
-      path: '/api/socket',
+      path: '/socket.io',
       addTrailingSlash: false,
       cors: {
         origin: '*',
@@ -76,6 +77,8 @@ export async function GET(req: NextRequest) {
         console.log('Client disconnected:', socket.id);
       });
     });
+
+    setSocketServer(io);
   }
 
   return new Response('Socket.IO server initialized', { status: 200 });

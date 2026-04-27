@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef, use, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { FiSend, FiMessageCircle } from 'react-icons/fi';
@@ -19,7 +18,6 @@ interface Message {
 
 export default function RoomPage({ params }: { params: Promise<{ slug: string }> }) {
   const resolvedParams = use(params);
-  const router = useRouter();
   const [isVerifying, setIsVerifying] = useState(true);
   const [isVerified, setIsVerified] = useState(false);
   const [password, setPassword] = useState('');
@@ -27,6 +25,8 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +34,10 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     return () => {
       if (socket) {
         socket.disconnect();
+      }
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
       }
     };
   }, [socket]);
@@ -90,9 +94,14 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
       const newSocket = io({
         path: '/socket.io',
+        transports: ['websocket'],
       });
 
+      let socketConnected = false;
+
       newSocket.on('connect', () => {
+        socketConnected = true;
+        stopPolling();
         console.log('Connected to socket server');
         newSocket.emit('join-room', resolvedParams.slug);
       });
@@ -102,6 +111,16 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
           const filtered = prev.filter((m) => m.tempId !== message.tempId);
           return [...filtered, { ...message, timestamp: new Date(message.timestamp) }];
         });
+      });
+
+      newSocket.on('connect_error', () => {
+        if (!socketConnected) {
+          startPolling();
+        }
+      });
+
+      newSocket.on('disconnect', () => {
+        startPolling();
       });
 
       newSocket.on('error', (error: { message: string }) => {
@@ -120,10 +139,10 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     }
   };
 
-  const handleSendMessage = (e: FormEvent) => {
+  const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault();
 
-    if (!newMessage.trim() || !socket) return;
+    if (!newMessage.trim()) return;
 
     const tempId = nanoid();
     const optimisticMessage: Message = {
@@ -135,15 +154,73 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
-    
-    socket.emit('send-message', {
-      roomSlug: resolvedParams.slug,
-      content: newMessage,
-      tempId,
-    });
+
+    if (socket && socket.connected) {
+      socket.emit('send-message', {
+        roomSlug: resolvedParams.slug,
+        content: newMessage,
+        tempId,
+      });
+    } else {
+      await sendMessageViaHttp(newMessage, tempId);
+    }
 
     setNewMessage('');
     inputRef.current?.focus();
+  };
+
+  const startPolling = () => {
+    if (pollingRef.current) return;
+    setIsPolling(true);
+    void fetchMessages();
+    pollingRef.current = setInterval(fetchMessages, 4000);
+  };
+
+  const stopPolling = () => {
+    if (!pollingRef.current) return;
+    clearInterval(pollingRef.current);
+    pollingRef.current = null;
+    setIsPolling(false);
+  };
+
+  const fetchMessages = async () => {
+    try {
+      const response = await fetch(`/api/rooms/${resolvedParams.slug}/messages`);
+      if (!response.ok) return;
+
+      const data = await response.json();
+      setMessages(
+        data.messages.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp),
+        }))
+      );
+    } catch (error) {
+      console.error('Polling messages failed', error);
+    }
+  };
+
+  const sendMessageViaHttp = async (content: string, tempId: string) => {
+    try {
+      const response = await fetch(`/api/rooms/${resolvedParams.slug}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, tempId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      const { message } = await response.json();
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.tempId !== message.tempId);
+        return [...filtered, { ...message, timestamp: new Date(message.timestamp) }];
+      });
+    } catch (error) {
+      console.error('HTTP send message failed', error);
+      toast.error('Message failed to send');
+    }
   };
 
   if (isVerifying) {
