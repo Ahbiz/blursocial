@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, use, FormEvent, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
-import { FiSend, FiMessageCircle, FiSmile, FiPlus, FiCornerUpLeft, FiX } from 'react-icons/fi';
+import { FiSend, FiMessageCircle, FiSmile, FiPlus, FiCornerUpLeft, FiX, FiArrowDown } from 'react-icons/fi';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import { nanoid } from 'nanoid';
@@ -125,6 +125,9 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isScrolledUpRef = useRef(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   const clientIdRef = useRef<string | null>(null);
   const clientHashRef = useRef<string | null>(null);
@@ -351,15 +354,27 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     };
   }, [socket]);
 
-  useEffect(() => {
-    if (isVerified) {
-      scrollToBottom();
-    }
-  }, [messages, isVerified]);
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+
+    const isScrolledUp = scrollHeight - scrollTop - clientHeight > 100;
+
+    isScrolledUpRef.current = isScrolledUp;
+    setShowScrollButton(isScrolledUp);
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    isScrolledUpRef.current = false;
+    setShowScrollButton(false);
   };
+
+  useEffect(() => {
+    if (isVerified && !isScrolledUpRef.current) {
+      scrollToBottom();
+    }
+  }, [messages, isVerified]);
 
   const handleVerifyPassword = async (e: FormEvent) => {
     e.preventDefault();
@@ -475,6 +490,9 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     e.preventDefault();
 
     if (!newMessage.trim()) return;
+
+    isScrolledUpRef.current = false;
+    setShowScrollButton(false);
 
     const tempId = nanoid();
     const optimisticMessage: Message = {
@@ -767,7 +785,11 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 relative"
+      >
         <div className="max-w-5xl mx-auto space-y-4">
           {messages.length === 0 ? (
             <div className="text-center py-12">
@@ -888,9 +910,21 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
           )}
           <div ref={messagesEndRef} />
         </div>
+
+        {showScrollButton && (
+          <div className="sticky bottom-4 w-full flex justify-center pointer-events-none z-20">
+            <button
+              onClick={scrollToBottom}
+              className="pointer-events-auto bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-primary)] rounded-full p-2 shadow-lg hover:bg-[var(--bg-primary)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] flex items-center justify-center"
+              aria-label="Scroll to bottom"
+            >
+              <FiArrowDown className="w-5 h-5" />
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="bg-[var(--bg-secondary)] border-t border-[var(--border-primary)] px-4 sm:px-6 py-4">
+      <div className="bg-[var(--bg-secondary)] border-t border-[var(--border-primary)] px-4 sm:px-6 py-4 z-10 relative">
         <form onSubmit={handleSendMessage} className="max-w-5xl mx-auto">
           {replyingTo && (
             <div className="mb-3 flex items-start gap-3 bg-[var(--accent-primary)]/5 border border-[var(--accent-primary)]/20 rounded-xl p-3">
