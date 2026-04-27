@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { Room } from '@/lib/models/Room';
 import { Message } from '@/lib/models/Room';
+import { hashClientId, summarizeReactions } from '@/lib/reactions';
 
 export async function GET(
   request: NextRequest,
@@ -10,6 +11,8 @@ export async function GET(
 ) {
   try {
     const { slug } = await params;
+    const clientId = request.headers.get('x-client-id') ?? undefined;
+    const clientHash = clientId ? hashClientId(clientId) : undefined;
 
     const db = await getDb();
     const room = await db.collection<Room>('rooms').findOne({ slug });
@@ -34,6 +37,7 @@ export async function GET(
         content: msg.content,
         timestamp: msg.timestamp,
         tempId: msg.tempId,
+        reactions: summarizeReactions(msg.reactions ?? {}, clientHash),
       })),
     });
   } catch (error) {
@@ -75,6 +79,7 @@ export async function POST(
       content: content.trim(),
       timestamp: new Date(),
       tempId,
+      reactions: {},
     };
 
     const result = await db.collection<Message>('messages').insertOne(message);
@@ -86,6 +91,7 @@ export async function POST(
           content: message.content,
           timestamp: message.timestamp,
           tempId,
+          reactions: [],
         },
       },
       { status: 201 }

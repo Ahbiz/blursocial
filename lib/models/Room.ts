@@ -15,4 +15,5 @@ export interface Message {
   content: string;
   timestamp: Date;
   tempId?: string;
+  reactions?: Record<string, string[]>;
 }

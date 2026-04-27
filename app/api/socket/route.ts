@@ -4,6 +4,12 @@ import { Server as HTTPServer } from 'http';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 import { Message } from '@/lib/models/Room';
+import {
+  applyReaction,
+  hashClientId,
+  normalizeEmoji,
+  summarizeReactionsWithHashes,
+} from '@/lib/reactions';
 import { getSocketServer, setSocketServer } from '@/lib/socketServer';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +61,7 @@ export async function GET(req: NextRequest) {
             content: data.content,
             timestamp: new Date(),
             tempId: data.tempId,
+            reactions: {},
           };
 
           const result = await db.collection<Message>('messages').insertOne(message);
@@ -64,6 +71,7 @@ export async function GET(req: NextRequest) {
             content: message.content,
             timestamp: message.timestamp,
             tempId: data.tempId,
+            reactions: [],
           };
 
           io!.to(data.roomSlug).emit('new-message', savedMessage);
@@ -72,6 +80,81 @@ export async function GET(req: NextRequest) {
           socket.emit('error', { message: 'Failed to send message' });
         }
       });
+
+      socket.on(
+        'react-message',
+        async (data: {
+          roomSlug: string;
+          messageId: string;
+          emoji: string;
+          action: 'add' | 'remove';
+          clientId: string;
+        }) => {
+          try {
+            const db = await getDb();
+            const room = await db.collection('rooms').findOne({ slug: data.roomSlug });
+
+            if (!room) {
+              socket.emit('error', { message: 'Room not found' });
+              return;
+            }
+
+            if (!ObjectId.isValid(data.messageId)) {
+              socket.emit('error', { message: 'Invalid message' });
+              return;
+            }
+
+            const normalizedEmoji = normalizeEmoji(data.emoji);
+            if (!normalizedEmoji) {
+              socket.emit('error', { message: 'Invalid emoji' });
+              return;
+            }
+
+            if (data.action !== 'add' && data.action !== 'remove') {
+              socket.emit('error', { message: 'Invalid reaction action' });
+              return;
+            }
+
+            const clientHash = hashClientId(data.clientId);
+            const messageCollection = db.collection<Message>('messages');
+            const messageObjectId = new ObjectId(data.messageId);
+
+            const message = await messageCollection.findOne({
+              _id: messageObjectId,
+              roomId: room._id as ObjectId,
+            });
+
+            if (!message) {
+              socket.emit('error', { message: 'Message not found' });
+              return;
+            }
+
+            const updatedReactions = applyReaction(
+              { ...(message.reactions ?? {}) },
+              normalizedEmoji,
+              clientHash,
+              data.action
+            );
+
+            await messageCollection.updateOne(
+              { _id: messageObjectId, roomId: room._id as ObjectId },
+              Object.keys(updatedReactions).length > 0
+                ? { $set: { reactions: updatedReactions } }
+                : { $unset: { reactions: '' } }
+            );
+
+            const reactionSummary = summarizeReactionsWithHashes(updatedReactions);
+
+            io!.to(data.roomSlug).emit('message-reactions-updated', {
+              messageId: data.messageId,
+              reactions: reactionSummary,
+            });
+          } catch (error) {
+            console.error('Error updating reaction:', error);
+            socket.emit('error', { message: 'Failed to update reaction' });
+          }
+        }
+      );
 
       socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);

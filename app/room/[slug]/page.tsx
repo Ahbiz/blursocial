@@ -1,12 +1,32 @@
 'use client';
 
-import { useState, useEffect, useRef, use, FormEvent } from 'react';
+import { useState, useEffect, useRef, use, FormEvent, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
-import { FiSend, FiMessageCircle } from 'react-icons/fi';
+import { FiSend, FiMessageCircle, FiSmile, FiPlus } from 'react-icons/fi';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import { nanoid } from 'nanoid';
+
+type ReactionSummary = {
+  emoji: string;
+  count: number;
+  reacted?: boolean;
+  hashes?: string[];
+};
+
+const isReactionActive = (
+  messageId: string,
+  emoji: string,
+  reaction: ReactionSummary,
+  localMap: SetMap
+) => {
+  if (typeof reaction.reacted === 'boolean') {
+    return reaction.reacted;
+  }
+
+  return localMap[messageId]?.has(emoji) ?? false;
+};
 
 interface Message {
   id: string;
@@ -14,7 +34,74 @@ interface Message {
   timestamp: Date;
   tempId?: string;
   isOptimistic?: boolean;
+  reactions: ReactionSummary[];
 }
+
+type SetMap = Record<string, Set<string>>;
+
+const CLIENT_ID_STORAGE_KEY = 'blur-chat-client-id';
+const REACTION_STORAGE_PREFIX = 'blur-chat-room-reactions:';
+const QUICK_REACTIONS = ['👍', '😂', '❤️', '🔥', '🎉', '😮'];
+
+const getReactionStorageKey = (slug: string) => `${REACTION_STORAGE_PREFIX}${slug}`;
+
+const cloneSetMap = (map: SetMap): SetMap =>
+  Object.fromEntries(Object.entries(map).map(([key, set]) => [key, new Set(set)]));
+
+const mutateSetMap = (
+  map: SetMap,
+  messageId: string,
+  emoji: string,
+  shouldAdd: boolean
+): SetMap => {
+  const next = cloneSetMap(map);
+  const current = new Set(next[messageId] ?? []);
+
+  if (shouldAdd) {
+    current.add(emoji);
+  } else {
+    current.delete(emoji);
+  }
+
+  if (current.size === 0) {
+    delete next[messageId];
+  } else {
+    next[messageId] = current;
+  }
+
+  return next;
+};
+
+const serializeSetMap = (map: SetMap): Record<string, string[]> =>
+  Object.fromEntries(Object.entries(map).map(([key, set]) => [key, Array.from(set)]));
+
+const deserializeSetMap = (record: Record<string, string[]>): SetMap =>
+  Object.fromEntries(Object.entries(record).map(([key, arr]) => [key, new Set(arr)]));
+
+const buildSetMapFromMessages = (messageList: Message[]): SetMap => {
+  const next: SetMap = {};
+
+  messageList.forEach((message) => {
+    const active = message.reactions
+      .filter((reaction) => reaction.reacted)
+      .map((reaction) => reaction.emoji);
+
+    if (active.length > 0) {
+      next[message.id] = new Set(active);
+    }
+  });
+
+  return next;
+};
+
+const cloneMessages = (messageList: Message[]): Message[] =>
+  messageList.map((message) => ({
+    ...message,
+    reactions: message.reactions.map((reaction) => ({
+      ...reaction,
+      hashes: reaction.hashes ? [...reaction.hashes] : undefined,
+    })),
+  }));
 
 export default function RoomPage({ params }: { params: Promise<{ slug: string }> }) {
   const resolvedParams = use(params);
@@ -26,9 +113,225 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   const [newMessage, setNewMessage] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isPolling, setIsPolling] = useState(false);
+  const [clientId, setClientId] = useState<string | null>(null);
+  const [clientHash, setClientHash] = useState<string | null>(null);
+  const [localReactions, setLocalReactions] = useState<SetMap>({});
+  const [activeReactionPicker, setActiveReactionPicker] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const clientIdRef = useRef<string | null>(null);
+  const clientHashRef = useRef<string | null>(null);
+  const localReactionsRef = useRef<SetMap>({});
+  const hasLoadedReactionsRef = useRef(false);
+  const pendingReactionsRef = useRef<Set<string>>(new Set());
+
+  const getStorageKey = useCallback(
+    () => getReactionStorageKey(resolvedParams.slug),
+    [resolvedParams.slug]
+  );
+
+  const ensureClientIdentity = useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    let stored = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+
+    if (!stored) {
+      stored =
+        typeof window.crypto?.randomUUID === 'function'
+          ? window.crypto.randomUUID()
+          : nanoid();
+      window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, stored);
+    }
+
+    setClientId(stored);
+    clientIdRef.current = stored;
+    return stored;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    ensureClientIdentity();
+  }, [ensureClientIdentity]);
+
+  useEffect(() => {
+    clientIdRef.current = clientId;
+  }, [clientId]);
+
+  useEffect(() => {
+    if (!clientId) return;
+
+    if (typeof window === 'undefined' || !window.crypto?.subtle) {
+      setClientHash(clientId);
+      return;
+    }
+
+    let cancelled = false;
+
+    const computeHash = async () => {
+      try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(clientId);
+        const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+        if (!cancelled) {
+          setClientHash(hashHex);
+        }
+      } catch (error) {
+        console.error('Failed to hash client id', error);
+        if (!cancelled) {
+          setClientHash(clientId);
+        }
+      }
+    };
+
+    void computeHash();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const storageKey = getStorageKey();
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, string[]>;
+        const deserialized = deserializeSetMap(parsed);
+        localReactionsRef.current = deserialized;
+        setLocalReactions(deserialized);
+      } else {
+        localReactionsRef.current = {};
+        setLocalReactions({});
+      }
+    } catch (error) {
+      console.warn('Failed to read reaction cache', error);
+      localReactionsRef.current = {};
+      setLocalReactions({});
+    } finally {
+      hasLoadedReactionsRef.current = true;
+    }
+  }, [getStorageKey]);
+
+  useEffect(() => {
+    clientHashRef.current = clientHash;
+  }, [clientHash]);
+
+  useEffect(() => {
+    localReactionsRef.current = localReactions;
+    if (!hasLoadedReactionsRef.current) return;
+    if (typeof window === 'undefined') return;
+
+    const storageKey = getStorageKey();
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify(serializeSetMap(localReactions))
+    );
+  }, [localReactions, getStorageKey]);
+
+  const mapServerMessage = useCallback((msg: any): Message => ({
+    id: msg.id,
+    content: msg.content,
+    timestamp: new Date(msg.timestamp),
+    tempId: msg.tempId,
+    reactions: Array.isArray(msg.reactions)
+      ? msg.reactions.map((reaction: any) => ({
+          emoji: reaction.emoji,
+          count: reaction.count,
+          reacted: Boolean(reaction.reacted),
+          hashes: reaction.hashes,
+        }))
+      : [],
+  }), []);
+
+  const applyServerReactionSnapshot = useCallback(
+    (
+      messageId: string,
+      payload: Array<{ emoji: string; count: number; hashes?: string[]; reacted?: boolean }>
+    ) => {
+      const hashedId = clientHashRef.current;
+
+      setMessages((prev) => {
+        const next = prev.map((message) => {
+          if (message.id !== messageId) return message;
+
+          const nextReactions = payload.map((reaction) => {
+            const isActive =
+              typeof reaction.reacted === 'boolean'
+                ? reaction.reacted
+                : hashedId && reaction.hashes
+                  ? reaction.hashes.includes(hashedId)
+                  : localReactionsRef.current[messageId]?.has(reaction.emoji) ?? false;
+
+            return {
+              emoji: reaction.emoji,
+              count: reaction.count,
+              reacted: isActive,
+              hashes: reaction.hashes,
+            };
+          });
+
+          return {
+            ...message,
+            reactions: nextReactions,
+          };
+        });
+
+        messagesRef.current = next;
+        return next;
+      });
+
+      if (payload.length === 0) {
+        const nextLocal = cloneSetMap(localReactionsRef.current);
+        if (nextLocal[messageId]) {
+          delete nextLocal[messageId];
+          localReactionsRef.current = nextLocal;
+          setLocalReactions(nextLocal);
+        }
+        return;
+      }
+
+      if (hashedId) {
+        const nextLocal = cloneSetMap(localReactionsRef.current);
+        delete nextLocal[messageId];
+
+        payload.forEach((reaction) => {
+          if (reaction.hashes?.includes(hashedId)) {
+            if (!nextLocal[messageId]) {
+              nextLocal[messageId] = new Set();
+            }
+            nextLocal[messageId]!.add(reaction.emoji);
+          }
+        });
+
+        localReactionsRef.current = nextLocal;
+        setLocalReactions(nextLocal);
+        return;
+      }
+
+      if (payload.some((reaction) => typeof reaction.reacted === 'boolean')) {
+        const nextLocal = cloneSetMap(localReactionsRef.current);
+        delete nextLocal[messageId];
+
+        payload.forEach((reaction) => {
+          if (reaction.reacted) {
+            if (!nextLocal[messageId]) {
+              nextLocal[messageId] = new Set();
+            }
+            nextLocal[messageId]!.add(reaction.emoji);
+          }
+        });
+
+        localReactionsRef.current = nextLocal;
+        setLocalReactions(nextLocal);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -73,23 +376,33 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
       setRoomName(data.room.name);
       setIsVerified(true);
-      await initializeRoom(data.room.id);
+      const ensuredId = ensureClientIdentity();
+      await initializeRoom(data.room.id, ensuredId);
     } catch (error) {
       toast.error('Something went wrong');
       setIsVerifying(false);
     }
   };
 
-  const initializeRoom = async (roomId: string) => {
+  const initializeRoom = async (roomId: string, providedClientId?: string | null) => {
     try {
-      const messagesResponse = await fetch(`/api/rooms/${resolvedParams.slug}/messages`);
+      const activeClientId = providedClientId ?? clientIdRef.current ?? ensureClientIdentity();
+      const headers: HeadersInit = activeClientId
+        ? { 'x-client-id': activeClientId }
+        : {};
+
+      const messagesResponse = await fetch(`/api/rooms/${resolvedParams.slug}/messages`, {
+        headers,
+      });
       const messagesData = await messagesResponse.json();
 
       if (messagesResponse.ok) {
-        setMessages(messagesData.messages.map((msg: any) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp),
-        })));
+        const mappedMessages: Message[] = messagesData.messages.map(mapServerMessage);
+        setMessages(mappedMessages);
+        messagesRef.current = mappedMessages;
+        const syncedReactions = buildSetMapFromMessages(mappedMessages);
+        localReactionsRef.current = syncedReactions;
+        setLocalReactions(syncedReactions);
       }
 
       const newSocket = io({
@@ -109,9 +422,22 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
       newSocket.on('new-message', (message: Message) => {
         setMessages((prev) => {
           const filtered = prev.filter((m) => m.tempId !== message.tempId);
-          return [...filtered, { ...message, timestamp: new Date(message.timestamp) }];
+          const mapped = mapServerMessage(message);
+          const next = [...filtered, mapped];
+          messagesRef.current = next;
+          return next;
         });
       });
+
+      newSocket.on(
+        'message-reactions-updated',
+        (payload: {
+          messageId: string;
+          reactions: Array<{ emoji: string; count: number; hashes?: string[] }>;
+        }) => {
+          applyServerReactionSnapshot(payload.messageId, payload.reactions);
+        }
+      );
 
       newSocket.on('connect_error', () => {
         if (!socketConnected) {
@@ -129,7 +455,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
       setSocket(newSocket);
       setIsVerifying(false);
-      
+
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
@@ -151,6 +477,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
       timestamp: new Date(),
       tempId,
       isOptimistic: true,
+      reactions: [],
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
@@ -185,16 +512,23 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
   const fetchMessages = async () => {
     try {
-      const response = await fetch(`/api/rooms/${resolvedParams.slug}/messages`);
+      const activeClientId = clientIdRef.current ?? ensureClientIdentity();
+      const headers: HeadersInit = activeClientId
+        ? { 'x-client-id': activeClientId }
+        : {};
+
+      const response = await fetch(`/api/rooms/${resolvedParams.slug}/messages`, {
+        headers,
+      });
       if (!response.ok) return;
 
       const data = await response.json();
-      setMessages(
-        data.messages.map((msg: any) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp),
-        }))
-      );
+      const mapped = data.messages.map(mapServerMessage);
+      setMessages(mapped);
+      messagesRef.current = mapped;
+      const syncedReactions = buildSetMapFromMessages(mapped);
+      localReactionsRef.current = syncedReactions;
+      setLocalReactions(syncedReactions);
     } catch (error) {
       console.error('Polling messages failed', error);
     }
@@ -215,11 +549,128 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
       const { message } = await response.json();
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.tempId !== message.tempId);
-        return [...filtered, { ...message, timestamp: new Date(message.timestamp) }];
+        const mapped = mapServerMessage(message);
+        const next = [...filtered, mapped];
+        messagesRef.current = next;
+        return next;
       });
     } catch (error) {
       console.error('HTTP send message failed', error);
       toast.error('Message failed to send');
+    }
+  };
+
+  const handleReactionToggle = async (messageId: string, emoji: string) => {
+    const activeClientId = clientIdRef.current ?? ensureClientIdentity();
+
+    if (!activeClientId) {
+      toast.error('Unable to identify client');
+      return;
+    }
+
+    const key = `${messageId}:${emoji}`;
+    if (pendingReactionsRef.current.has(key)) {
+      return;
+    }
+
+    const currentSet = localReactionsRef.current[messageId] ?? new Set<string>();
+    const isAdding = !currentSet.has(emoji);
+    const action: 'add' | 'remove' = isAdding ? 'add' : 'remove';
+
+    const previousMessages = cloneMessages(messagesRef.current);
+    const previousLocal = cloneSetMap(localReactionsRef.current);
+
+    const mutatedLocal = mutateSetMap(localReactionsRef.current, messageId, emoji, isAdding);
+    localReactionsRef.current = mutatedLocal;
+    setLocalReactions(mutatedLocal);
+
+    setMessages((prev) => {
+      const next = prev.map((message) => {
+        if (message.id !== messageId) return message;
+
+        let found = false;
+        const updatedReactions = message.reactions.map((reaction) => {
+          if (reaction.emoji !== emoji) return reaction;
+          found = true;
+          const nextCount = isAdding
+            ? reaction.count + 1
+            : Math.max(reaction.count - 1, 0);
+          return {
+            ...reaction,
+            count: nextCount,
+            reacted: isAdding ? true : nextCount > 0 ? reaction.reacted : false,
+          };
+        });
+
+        let nextReactions = updatedReactions;
+
+        if (!found && isAdding) {
+          nextReactions = [
+            ...updatedReactions,
+            {
+              emoji,
+              count: 1,
+              reacted: true,
+            },
+          ];
+        }
+
+        if (!isAdding) {
+          nextReactions = nextReactions.filter((reaction) => reaction.count > 0);
+        }
+
+        return {
+          ...message,
+          reactions: nextReactions,
+        };
+      });
+
+      messagesRef.current = next;
+      return next;
+    });
+
+    pendingReactionsRef.current.add(key);
+
+    const payload = {
+      roomSlug: resolvedParams.slug,
+      messageId,
+      emoji,
+      action,
+      clientId: activeClientId,
+    };
+
+    try {
+      if (socket && socket.connected) {
+        socket.emit('react-message', payload);
+      } else {
+        const response = await fetch(
+          `/api/rooms/${resolvedParams.slug}/messages/${messageId}/reactions`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-client-id': activeClientId,
+            },
+            body: JSON.stringify({ emoji, action }),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error('Failed to update reactions');
+        }
+
+        const data = await response.json();
+        applyServerReactionSnapshot(messageId, data.reactions);
+      }
+    } catch (error) {
+      console.error('Reaction toggle failed', error);
+      toast.error('Reaction failed');
+      localReactionsRef.current = previousLocal;
+      setLocalReactions(previousLocal);
+      messagesRef.current = previousMessages;
+      setMessages(previousMessages);
+    } finally {
+      pendingReactionsRef.current.delete(key);
     }
   };
 
@@ -303,16 +754,83 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
                 key={message.id}
                 className={`animate-fade-in ${message.isOptimistic ? 'opacity-60' : ''}`}
               >
-                <div className="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-primary)] p-4 max-w-2xl">
-                  <p className="text-[var(--text-primary)] break-words whitespace-pre-wrap">
-                    {message.content}
-                  </p>
-                  <p className="text-xs text-[var(--text-tertiary)] mt-2">
-                    {message.timestamp.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
+                <div className="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-primary)] p-4 max-w-2xl shadow-sm hover:shadow-[var(--shadow-md)] transition-shadow">
+                  <div className="flex items-start justify-between gap-4">
+                    <p className="text-[var(--text-primary)] break-words whitespace-pre-wrap flex-1">
+                      {message.content}
+                    </p>
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] whitespace-nowrap">
+                      {message.timestamp.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {message.reactions.map((reaction) => {
+                      const active = isReactionActive(
+                        message.id,
+                        reaction.emoji,
+                        reaction,
+                        localReactions
+                      );
+
+                      return (
+                        <button
+                          key={reaction.emoji}
+                          onClick={() => void handleReactionToggle(message.id, reaction.emoji)}
+                          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-secondary)] ${
+                            active
+                              ? 'bg-[var(--accent-primary)]/15 border-[var(--accent-primary)] text-[var(--accent-primary)] shadow-[0_0_0_1px_var(--accent-primary)]'
+                              : 'border-[var(--border-primary)] text-[var(--text-secondary)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/5'
+                          }`}
+                          aria-pressed={active}
+                        >
+                          <span className="text-base leading-none">{reaction.emoji}</span>
+                          <span className="text-xs font-medium">{reaction.count}</span>
+                        </button>
+                      );
                     })}
-                  </p>
+
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveReactionPicker((prev) =>
+                            prev === message.id ? null : message.id
+                          )
+                        }
+                        className="flex items-center justify-center w-8 h-8 rounded-full border border-[var(--border-primary)] text-[var(--text-secondary)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-secondary)]"
+                        aria-label="Add reaction"
+                      >
+                        {activeReactionPicker === message.id ? (
+                          <FiSmile className="w-4 h-4" />
+                        ) : (
+                          <FiPlus className="w-4 h-4" />
+                        )}
+                      </button>
+
+                      {activeReactionPicker === message.id && (
+                        <div className="absolute bottom-full left-0 mb-2 bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded-xl shadow-[var(--shadow-lg)] p-2 flex gap-1 animate-scale-in z-10">
+                          {QUICK_REACTIONS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => {
+                                setActiveReactionPicker(null);
+                                void handleReactionToggle(message.id, emoji);
+                              }}
+                              className="w-10 h-10 flex items-center justify-center text-xl rounded-lg hover:bg-[var(--accent-primary)]/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"
+                              aria-label={`React with ${emoji}`}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             ))

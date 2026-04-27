@@ -3,6 +3,12 @@ const { parse } = require('url');
 const next = require('next');
 const { Server } = require('socket.io');
 const { MongoClient, ObjectId } = require('mongodb');
+const {
+  hashClientId,
+  normalizeEmoji,
+  summarizeReactionsWithHashes,
+  applyReaction,
+} = require('./lib/reactions');
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
@@ -69,6 +75,7 @@ app.prepare().then(() => {
           content: data.content,
           timestamp: new Date(),
           tempId: data.tempId,
+          reactions: {},
         };
 
         const result = await database.collection('messages').insertOne(message);
@@ -78,12 +85,71 @@ app.prepare().then(() => {
           content: message.content,
           timestamp: message.timestamp,
           tempId: data.tempId,
+          reactions: [],
         };
 
         io.to(data.roomSlug).emit('new-message', savedMessage);
       } catch (error) {
         console.error('Error saving message:', error);
         socket.emit('error', { message: 'Failed to send message' });
+      }
+    });
+
+    socket.on('react-message', async (data) => {
+      try {
+        const database = await connectToDatabase();
+        const room = await database.collection('rooms').findOne({ slug: data.roomSlug });
+
+        if (!room) {
+          socket.emit('error', { message: 'Room not found' });
+          return;
+        }
+
+        const normalizedEmoji = normalizeEmoji(data.emoji);
+
+        if (!normalizedEmoji) {
+          socket.emit('error', { message: 'Invalid emoji' });
+          return;
+        }
+
+        if (data.action !== 'add' && data.action !== 'remove') {
+          socket.emit('error', { message: 'Invalid reaction action' });
+          return;
+        }
+
+        const clientHash = hashClientId(data.clientId);
+
+        const message = await database.collection('messages').findOne({
+          _id: new ObjectId(data.messageId),
+          roomId: room._id,
+        });
+
+        if (!message) {
+          socket.emit('error', { message: 'Message not found' });
+          return;
+        }
+
+        const updatedReactions = applyReaction(
+          { ...(message.reactions ?? {}) },
+          normalizedEmoji,
+          clientHash,
+          data.action
+        );
+
+        await database.collection('messages').updateOne(
+          { _id: new ObjectId(data.messageId), roomId: room._id },
+          Object.keys(updatedReactions).length > 0
+            ? { $set: { reactions: updatedReactions } }
+            : { $unset: { reactions: '' } }
+        );
+
+        io.to(data.roomSlug).emit('message-reactions-updated', {
+          messageId: data.messageId,
+          reactions: summarizeReactionsWithHashes(updatedReactions),
+        });
+      } catch (error) {
+        console.error('Error updating reaction:', error);
+        socket.emit('error', { message: 'Failed to update reaction' });
       }
     });
 
