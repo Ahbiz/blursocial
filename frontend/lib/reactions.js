@@ -1,21 +1,18 @@
-import { createHash } from 'crypto';
+const { createHash } = require('crypto');
 
-export const VALID_EMOJI_REGEX = /\p{Extended_Pictographic}/u;
+const VALID_EMOJI_REGEX = /\p{Extended_Pictographic}/u;
 
-export function normalizeEmoji(emoji: string): string | null {
+function normalizeEmoji(emoji) {
   if (!emoji || typeof emoji !== 'string') return null;
   const trimmed = emoji.trim();
   return VALID_EMOJI_REGEX.test(trimmed) ? trimmed : null;
 }
 
-export function hashClientId(clientId: string): string {
-  return createHash('sha256').update(clientId).digest('hex');
+function hashClientId(clientId) {
+  return createHash('sha256').update(clientId || '').digest('hex');
 }
 
-export function summarizeReactions(
-  reactions: Record<string, string[]>,
-  clientHash?: string
-) {
+function summarizeReactions(reactions, clientHash) {
   return Object.entries(reactions).map(([emoji, users]) => ({
     emoji,
     count: users.length,
@@ -23,9 +20,7 @@ export function summarizeReactions(
   }));
 }
 
-export function summarizeReactionsWithHashes(
-  reactions: Record<string, string[]>
-) {
+function summarizeReactionsWithHashes(reactions) {
   return Object.entries(reactions).map(([emoji, users]) => ({
     emoji,
     count: users.length,
@@ -33,12 +28,7 @@ export function summarizeReactionsWithHashes(
   }));
 }
 
-export function applyReaction(
-  reactions: Record<string, string[]>,
-  emoji: string,
-  clientHash: string,
-  action: 'add' | 'remove'
-) {
+function applyReaction(reactions, emoji, clientHash, action) {
   const currentUsers = new Set(reactions[emoji] ?? []);
 
   if (action === 'add') {
@@ -55,3 +45,12 @@ export function applyReaction(
 
   return reactions;
 }
+
+module.exports = {
+  hashClientId,
+  normalizeEmoji,
+  summarizeReactionsWithHashes,
+  applyReaction,
+  summarizeReactions,
+  VALID_EMOJI_REGEX
+};

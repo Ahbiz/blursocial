@@ -8,12 +8,15 @@ import { FiMessageCircle, FiPlus, FiCopy, FiLogOut, FiExternalLink } from 'react
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import Card from '@/components/Card';
+import { Durations } from '@/components/Durations';
 
 interface Room {
   id: string;
   name: string;
   slug: string;
   createdAt: Date;
+  expiresAt?: Date | null;
+
 }
 
 export default function DashboardPage() {
@@ -22,6 +25,7 @@ export default function DashboardPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [duration, setDuration] = useState("24");
   const [roomName, setRoomName] = useState('');
   const [roomPassword, setRoomPassword] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -70,10 +74,13 @@ export default function DashboardPage() {
       const response = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: roomName, password: roomPassword }),
+        body: JSON.stringify({ name: roomName, password: roomPassword, duration: parseInt(duration) }),
       });
 
       const data = await response.json();
+      if (response.ok) {
+        setDuration('24');
+      }
 
       if (!response.ok) {
         toast.error(data.error || 'Failed to create room');
@@ -185,37 +192,71 @@ export default function DashboardPage() {
             </div>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {rooms.map((room) => (
-              <Card key={room.id} hover className="p-6 animate-fade-in">
-                <h3 className="text-lg font-semibold mb-2 truncate">{room.name}</h3>
-                <p className="text-sm text-[var(--text-tertiary)] mb-4">
-                  Created {new Date(room.createdAt).toLocaleDateString()}
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => copyRoomLink(room.slug)}
-                    className="flex-1 flex items-center justify-center gap-2"
-                  >
-                    <FiCopy className="w-4 h-4" />
-                    Copy Link
-                  </Button>
-                  <Link href={`/room/${room.slug}`} className="flex-1">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="w-full flex items-center justify-center gap-2"
-                    >
-                      <FiExternalLink className="w-4 h-4" />
-                      Open
-                    </Button>
-                  </Link>
-                </div>
-              </Card>
-            ))}
-          </div>
+       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  {rooms.map((room) => (
+    <Card key={room.id} hover className="p-6 animate-fade-in flex flex-col justify-between">
+      <div>
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="text-lg font-semibold truncate flex-1">{room.name}</h3>
+          
+          {/* 1. Badge for Permanent vs Temporary */}
+          {!room.expiresAt ? (
+            <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded-md bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]  border border-green-500/20">
+              Permanent
+            </span>
+          ) : (
+            <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded-md bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20">
+              Temporary
+            </span>
+          )}
+        </div>
+
+        <p className="text-sm text-[var(--text-tertiary)] mb-1">
+          Created {new Date(room.createdAt).toLocaleDateString()}
+        </p>
+
+        {/* 2. Expiration Date/Time Text */}
+        <p className="text-xs mb-4">
+          {room.expiresAt ? (
+            <span className="text-[var(--error)] flex items-center gap-1">
+              <span className="opacity-70">Expires:</span> 
+              {new Date(room.expiresAt).toLocaleString([], { 
+                month: 'short', 
+                day: 'numeric', 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              })}
+            </span>
+          ) : (
+            <span className="text-[var(--text-tertiary)] ">No expiration set</span>
+          )}
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => copyRoomLink(room.slug)}
+          className="flex-1 flex items-center justify-center gap-2"
+        >
+          <FiCopy className="w-4 h-4" />
+          Copy Link
+        </Button>
+        <Link href={`/room/${room.slug}`} className="flex-1">
+          <Button
+            variant="primary"
+            size="sm"
+            className="w-full flex items-center justify-center gap-2"
+          >
+            <FiExternalLink className="w-4 h-4" />
+            Open
+          </Button>
+        </Link>
+      </div>
+    </Card>
+  ))}
+</div>
         )}
       </main>
 
@@ -242,6 +283,10 @@ export default function DashboardPage() {
                 onChange={(e) => setRoomPassword(e.target.value)}
                 required
                 minLength={4}
+              />
+              <Durations
+                value={duration}
+                onChange={setDuration}
               />
               <div className="flex gap-3 pt-2">
                 <Button

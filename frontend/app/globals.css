@@ -13,6 +13,7 @@
   
   --accent-primary: #FF6B9D;
   --accent-secondary: #C44569;
+  --accent-tertiary: #FF007F;
   --accent-glow: rgba(255, 107, 157, 0.15);
   
   --border-primary: rgba(255, 255, 255, 0.08);
@@ -136,4 +137,44 @@ body {
 
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.animate-pulse-fast {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes floatUp {
+  0% {
+    /* Start below the screen */
+    transform: translateY(0); 
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    /* Move up by 110% of the screen height */
+    transform: translateY(-110vh); 
+    opacity: 0;
+  }
+}
+
+.particle {
+  position: absolute;
+  /* This is the starting line: the very bottom of the container */
+  top: 100%; 
+  border-radius: 50%;
+  pointer-events: none;
+  animation: floatUp linear infinite;
+  will-change: transform;
 }

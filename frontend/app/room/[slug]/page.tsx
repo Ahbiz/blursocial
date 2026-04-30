@@ -122,11 +122,13 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   const [localReactions, setLocalReactions] = useState<SetMap>({});
   const [activeReactionPicker, setActiveReactionPicker] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [lastReadMessageIndex, setLastReadMessageIndex] = useState<number | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isScrolledUpRef = useRef(false);
+  const isAtBottomRef = useRef(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   const clientIdRef = useRef<string | null>(null);
@@ -358,20 +360,30 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
 
-    const isScrolledUp = scrollHeight - scrollTop - clientHeight > 100;
+    // Check if user is at the bottom (within 100px threshold)
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+    isAtBottomRef.current = isAtBottom;
 
-    isScrolledUpRef.current = isScrolledUp;
-    setShowScrollButton(isScrolledUp);
+    // Show button if user is scrolled up
+    setShowScrollButton(!isAtBottom);
+
+    // Reset unread count and mark messages as read when user scrolls to bottom
+    if (isAtBottom) {
+      setUnreadCount(0);
+      setLastReadMessageIndex(messages.length - 1);
+    }
   };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    isScrolledUpRef.current = false;
+    isAtBottomRef.current = true;
     setShowScrollButton(false);
+    setUnreadCount(0);
+    setLastReadMessageIndex(messages.length - 1);
   };
 
   useEffect(() => {
-    if (isVerified && !isScrolledUpRef.current) {
+    if (isVerified && isAtBottomRef.current) {
       scrollToBottom();
     }
   }, [messages, isVerified]);
@@ -448,6 +460,11 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
           messagesRef.current = next;
           return next;
         });
+
+        // Increment unread count if user is not at bottom
+        if (!isAtBottomRef.current) {
+          setUnreadCount((prev) => prev + 1);
+        }
       });
 
       newSocket.on(
@@ -491,8 +508,9 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
     if (!newMessage.trim()) return;
 
-    isScrolledUpRef.current = false;
+    isAtBottomRef.current = true;
     setShowScrollButton(false);
+    setUnreadCount(0);
 
     const tempId = nanoid();
     const optimisticMessage: Message = {
@@ -722,7 +740,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     }
   };
 
-  if (isVerifying) {
+  if (isVerifying || !isVerified) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <div className="absolute inset-0 bg-gradient-to-br from-[var(--accent-glow)] via-transparent to-transparent opacity-30" />
@@ -801,12 +819,25 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
               </p>
             </div>
           ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                className={`animate-fade-in ${message.isOptimistic ? 'opacity-60' : ''}`}
-              >
-                <div className="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-primary)] p-4 max-w-2xl shadow-sm hover:shadow-[var(--shadow-md)] transition-shadow">
+            messages.map((message, index) => (
+              <div key={message.id}>
+                {lastReadMessageIndex !== null && index === lastReadMessageIndex + 1 && (
+                  <div className="relative my-6 flex items-center gap-4">
+                    <div className="flex-1 h-px bg-gradient-to-r from-transparent via-[var(--accent-primary)] to-transparent" />
+                    <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-[var(--accent-primary)]/10 border border-[var(--accent-primary)]/30">
+                      <div className="w-2 h-2 rounded-full bg-[var(--accent-primary)]" />
+                      <span className="text-xs font-semibold uppercase tracking-widest text-[var(--accent-primary)]">
+                        Unread Messages
+                      </span>
+                      <div className="w-2 h-2 rounded-full bg-[var(--accent-primary)]" />
+                    </div>
+                    <div className="flex-1 h-px bg-gradient-to-r from-transparent via-[var(--accent-primary)] to-transparent" />
+                  </div>
+                )}
+                <div
+                  className={`animate-fade-in ${message.isOptimistic ? 'opacity-60' : ''}`}
+                >
+                  <div className="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-primary)] p-4 max-w-2xl shadow-sm hover:shadow-[var(--shadow-md)] transition-shadow">
                   {message.replyTo && (
                     <div className="mb-3 pl-3 border-l-2 border-[var(--accent-primary)] bg-[var(--accent-primary)]/5 rounded-r-lg p-2">
                       <div className="flex items-center gap-1.5 mb-1">
@@ -904,6 +935,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
                       <FiCornerUpLeft className="w-4 h-4" />
                     </button>
                   </div>
+                  </div>
                 </div>
               </div>
             ))
@@ -912,13 +944,18 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
         </div>
 
         {showScrollButton && (
-          <div className="sticky bottom-4 w-full flex justify-center pointer-events-none z-20">
+          <div className="sticky bottom-4 w-full flex justify-end pr-4 sm:pr-6 pointer-events-none z-20">
             <button
               onClick={scrollToBottom}
-              className="pointer-events-auto bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-primary)] rounded-full p-2 shadow-lg hover:bg-[var(--bg-primary)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] flex items-center justify-center"
-              aria-label="Scroll to bottom"
+              className="pointer-events-auto bg-[var(--accent-primary)] text-white border border-[var(--accent-primary)] rounded-full p-3 shadow-lg hover:bg-[var(--accent-primary)]/90 hover:shadow-xl transition-all focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/50 focus:ring-offset-2 focus:ring-offset-[var(--bg-primary)] flex items-center justify-center gap-2 relative"
+              aria-label={unreadCount > 0 ? `${unreadCount} unread messages, scroll to bottom` : 'Scroll to bottom'}
             >
               <FiArrowDown className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <div className="flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-white text-[var(--accent-primary)] text-xs font-bold">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </div>
+              )}
             </button>
           </div>
         )}

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
+import FloatingDots from "@/components/Floaties";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -69,9 +70,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>
-        {children}
+  <html lang="en">
+      <body className=" relative min-h-screen"> 
+        {/* Dots go first (Background Layer) */}
+        <FloatingDots />
+
+        {/* Content goes second (Foreground Layer) */}
+        <div className="relative z-10">
+          {children}
+        </div>
         <Toaster
           position="top-center"
           toastOptions={{
