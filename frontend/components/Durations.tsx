@@ -14,6 +14,7 @@ const DURATION_OPTIONS: DurationOption[] = [
   { label: '1h', value: '1' },
   { label: '12h', value: '12' },
   { label: '24h', value: '24' },
+  {label: '3d', value: '72' },
   { label: '1w', value: '168' },
   { label: '∞', value: '0' },
 ];
