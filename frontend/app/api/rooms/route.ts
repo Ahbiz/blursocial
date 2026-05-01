@@ -5,6 +5,9 @@ import { hashPassword } from '@/lib/auth';
 import { Room } from '@/lib/models/Room';
 import { nanoid } from 'nanoid';
 
+/**
+ * POST: Create a new room with an optional duration
+ */
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
@@ -16,8 +19,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { name, password } = await request.json();
+    // Extract duration from the request (sent from your Durations component)
+    const { name, password, duration } = await request.json();
 
+    // --- Validations ---
     if (!name || !password) {
       return NextResponse.json(
         { error: 'Room name and password are required' },
@@ -43,12 +48,20 @@ export async function POST(request: NextRequest) {
     const slug = nanoid(10);
     const hashedPassword = await hashPassword(password);
 
+    // --- Expiration Logic ---
+    // If duration is 0, we treat it as infinite (null in DB).
+    // Otherwise, we calculate current time + hours converted to milliseconds.
+    const expiresAt = duration && duration > 0 
+      ? new Date(Date.now() + duration * 60 * 60 * 1000) 
+      : null;
+
     const result = await db.collection<Room>('rooms').insertOne({
       name,
       slug,
       password: hashedPassword,
       createdBy: user._id,
       createdAt: new Date(),
+      expiresAt, // MongoDB TTL index handles auto-deletion based on this field
     });
 
     return NextResponse.json({
@@ -57,6 +70,7 @@ export async function POST(request: NextRequest) {
         id: result.insertedId.toString(),
         name,
         slug,
+        expiresAt,
       },
     });
   } catch (error) {
@@ -68,6 +82,9 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * GET: Fetch all rooms created by the current user that haven't expired
+ */
 export async function GET() {
   try {
     const user = await getCurrentUser();
@@ -80,9 +97,19 @@ export async function GET() {
     }
 
     const db = await getDb();
+    
+    // Filter logic:
+    // 1. Must be created by the user.
+    // 2. Either expiresAt is in the future ($gt now) OR expiresAt is null (permanent).
     const rooms = await db
       .collection<Room>('rooms')
-      .find({ createdBy: user._id })
+      .find({ 
+        createdBy: user._id,
+        $or: [
+          { expiresAt: { $gt: new Date() } },
+          { expiresAt: null }
+        ]
+      })
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -92,6 +119,7 @@ export async function GET() {
         name: room.name,
         slug: room.slug,
         createdAt: room.createdAt,
+        expiresAt: room.expiresAt,
       })),
     });
   } catch (error) {
