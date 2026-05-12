@@ -1,3 +1,7 @@
+// Override DNS to use public resolvers — local DNS blocks MongoDB SRV lookups
+require('dns').setDefaultResultOrder('ipv4first');
+require('dns').setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+
 const { createServer } = require('http');
 const { parse } = require('url');
 const next = require('next');
