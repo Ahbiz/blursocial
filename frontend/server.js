@@ -15,10 +15,10 @@ const {
 } = require('./lib/reactions');
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = 'localhost';
+const hostname = '0.0.0.0';
 const port = 3000;
 
-const app = next({ dev, hostname, port });
+const app = next({ dev, hostname: 'localhost', port });
 const handle = app.getRequestHandler();
 
 let db;
@@ -196,6 +196,7 @@ app.prepare().then(() => {
       process.exit(1);
     })
     .listen(port, () => {
-      console.log(`> Ready on http://${hostname}:${port}`);
+      console.log(`> Ready on http://localhost:${port}`);
+      console.log(`> On your network: http://10.215.12.249:${port}`);
     });
 });
