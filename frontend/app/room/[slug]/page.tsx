@@ -248,7 +248,7 @@ function MessageBubble({
 // ── Main page component ───────────────────────────────────────────────────────
 export default function RoomPage({ params }: { params: Promise<{ slug: string }> }) {
   const resolvedParams = use(params);
-  const [isVerifying, setIsVerifying] = useState(true);
+  const [isVerifying, setIsVerifying] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
   const [roomNotFound, setRoomNotFound] = useState(false);
   const [password, setPassword] = useState('');
@@ -416,8 +416,9 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
       if (response.status === 404) { setRoomNotFound(true); setIsVerifying(false); return; }
       if (!response.ok) { toast.error(data.error || 'Invalid password'); setIsVerifying(false); return; }
       setRoomName(data.room.name);
-      setIsVerified(true);
+      // initializeRoom sets isVerifying(false) and then we set isVerified(true)
       await initializeRoom(data.room.id, ensureClientIdentity());
+      setIsVerified(true);
     } catch { toast.error('Something went wrong'); setIsVerifying(false); }
   };
 
@@ -607,7 +608,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
   }
 
   // ── Password gate ───────────────────────────────────────────────────────────
-  if (isVerifying || !isVerified) {
+  if (!isVerified) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <div className="absolute inset-0 bg-gradient-to-br from-[var(--accent-glow)] via-transparent to-transparent opacity-30" />
@@ -629,9 +630,10 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoFocus
+                disabled={isVerifying}
               />
-              <Button type="submit" variant="primary" size="lg" className="w-full">
-                Join Room
+              <Button type="submit" variant="primary" size="lg" className="w-full" isLoading={isVerifying}>
+                {isVerifying ? 'Joining…' : 'Join Room'}
               </Button>
             </form>
           </div>
