@@ -407,19 +407,27 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
     e.preventDefault();
     setIsVerifying(true);
     try {
+      console.log('[Room] Submitting password for slug:', resolvedParams.slug);
       const response = await fetch(`/api/rooms/${resolvedParams.slug}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
+      console.log('[Room] Verify response status:', response.status);
       const data = await response.json();
+      console.log('[Room] Verify response data:', data);
       if (response.status === 404) { setRoomNotFound(true); setIsVerifying(false); return; }
       if (!response.ok) { toast.error(data.error || 'Invalid password'); setIsVerifying(false); return; }
       setRoomName(data.room.name);
-      // initializeRoom sets isVerifying(false) and then we set isVerified(true)
+      console.log('[Room] Password correct, initializing room...');
       await initializeRoom(data.room.id, ensureClientIdentity());
+      console.log('[Room] initializeRoom done, setting isVerified=true');
       setIsVerified(true);
-    } catch { toast.error('Something went wrong'); setIsVerifying(false); }
+    } catch (err) {
+      console.error('[Room] handleVerifyPassword error:', err);
+      toast.error('Something went wrong');
+      setIsVerifying(false);
+    }
   };
 
   const startPolling = () => {
@@ -450,23 +458,28 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
 
   const initializeRoom = async (roomId: string, providedClientId?: string | null) => {
     try {
+      console.log('[Room] initializeRoom called, roomId:', roomId);
       const activeClientId = providedClientId ?? clientIdRef.current ?? ensureClientIdentity();
       const headers: HeadersInit = activeClientId ? { 'x-client-id': activeClientId } : {};
       const messagesResponse = await fetch(`/api/rooms/${resolvedParams.slug}/messages`, { headers });
+      console.log('[Room] Messages fetch status:', messagesResponse.status);
       const messagesData = await messagesResponse.json();
       if (messagesResponse.ok) {
         const mapped: Message[] = messagesData.messages.map(mapServerMessage);
         setMessages(mapped); messagesRef.current = mapped;
         const synced = buildSetMapFromMessages(mapped);
         localReactionsRef.current = synced; setLocalReactions(synced);
+        console.log('[Room] Messages loaded:', mapped.length);
       }
 
+      console.log('[Room] Connecting socket...');
       const newSocket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
       let socketConnected = false;
 
       newSocket.on('connect', () => {
         socketConnected = true;
         stopPolling();
+        console.log('[Room] Socket connected:', newSocket.id);
         newSocket.emit('join-room', resolvedParams.slug);
       });
 
@@ -487,14 +500,25 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
         applyServerReactionSnapshot(payload.messageId, payload.reactions);
       });
 
-      newSocket.on('connect_error', () => { if (!socketConnected) startPolling(); });
-      newSocket.on('disconnect', () => startPolling());
+      newSocket.on('connect_error', (err) => {
+        console.error('[Room] Socket connect_error:', err.message);
+        if (!socketConnected) startPolling();
+      });
+      newSocket.on('disconnect', (reason) => {
+        console.warn('[Room] Socket disconnected:', reason);
+        startPolling();
+      });
       newSocket.on('error', (error: { message: string }) => toast.error(error.message));
 
       setSocket(newSocket);
       setIsVerifying(false);
+      console.log('[Room] initializeRoom complete');
       setTimeout(() => inputRef.current?.focus(), 100);
-    } catch { toast.error('Failed to join room'); setIsVerifying(false); }
+    } catch (err) {
+      console.error('[Room] initializeRoom error:', err);
+      toast.error('Failed to join room');
+      setIsVerifying(false);
+    }
   };
 
   const sendMessageViaHttp = async (content: string, tempId: string, replyTo: Message | null = null) => {
