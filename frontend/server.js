@@ -57,11 +57,26 @@ app.prepare().then(() => {
     socket.on('join-room', (roomSlug) => {
       socket.join(roomSlug);
       console.log(`Socket ${socket.id} joined room ${roomSlug}`);
+      // Broadcast updated count to everyone in the room
+      const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 1;
+      io.to(roomSlug).emit('room-user-count', count);
     });
 
     socket.on('leave-room', (roomSlug) => {
       socket.leave(roomSlug);
       console.log(`Socket ${socket.id} left room ${roomSlug}`);
+      const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 0;
+      io.to(roomSlug).emit('room-user-count', count);
+    });
+
+    socket.on('disconnect', () => {
+      // Update count for all rooms this socket was in
+      socket.rooms.forEach((roomSlug) => {
+        if (roomSlug === socket.id) return; // skip the default personal room
+        const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 0;
+        io.to(roomSlug).emit('room-user-count', count);
+      });
+      console.log('Client disconnected:', socket.id);
     });
 
     socket.on('send-message', async (data) => {
@@ -165,6 +180,12 @@ app.prepare().then(() => {
     });
 
     socket.on('disconnect', () => {
+      // Update count for all rooms this socket was in before disconnecting
+      socket.rooms.forEach((roomSlug) => {
+        if (roomSlug === socket.id) return;
+        const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 0;
+        io.to(roomSlug).emit('room-user-count', count);
+      });
       console.log('Client disconnected:', socket.id);
     });
   });
