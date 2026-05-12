@@ -460,7 +460,7 @@ export default function RoomPage({ params }: { params: Promise<{ slug: string }>
         localReactionsRef.current = synced; setLocalReactions(synced);
       }
 
-      const newSocket = io({ path: '/socket.io', transports: ['websocket'] });
+      const newSocket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
       let socketConnected = false;
 
       newSocket.on('connect', () => {
