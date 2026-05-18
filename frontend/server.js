@@ -69,13 +69,18 @@ app.prepare().then(() => {
       io.to(roomSlug).emit('room-user-count', count);
     });
 
-    socket.on('disconnect', () => {
-      // Update count for all rooms this socket was in
+    socket.on('disconnecting', () => {
+      // 'disconnecting' fires before the socket leaves its rooms, so socket.rooms is still populated
       socket.rooms.forEach((roomSlug) => {
-        if (roomSlug === socket.id) return; // skip the default personal room
-        const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 0;
+        if (roomSlug === socket.id) return; // skip the socket's own personal room
+        const room = io.sockets.adapter.rooms.get(roomSlug);
+        // subtract 1 because this socket is still counted but is leaving
+        const count = room ? Math.max(room.size - 1, 0) : 0;
         io.to(roomSlug).emit('room-user-count', count);
       });
+    });
+
+    socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
     });
 
@@ -177,16 +182,6 @@ app.prepare().then(() => {
         console.error('Error updating reaction:', error);
         socket.emit('error', { message: 'Failed to update reaction' });
       }
-    });
-
-    socket.on('disconnect', () => {
-      // Update count for all rooms this socket was in before disconnecting
-      socket.rooms.forEach((roomSlug) => {
-        if (roomSlug === socket.id) return;
-        const count = io.sockets.adapter.rooms.get(roomSlug)?.size ?? 0;
-        io.to(roomSlug).emit('room-user-count', count);
-      });
-      console.log('Client disconnected:', socket.id);
     });
   });
 
